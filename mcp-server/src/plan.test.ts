@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeSegments, planCuts, validateCutPlan } from "./plan.js";
+import {
+  MAX_SEGMENTS,
+  MAX_VIDEO_DURATION_SEC,
+  planDemoCutsSchema,
+  validateCutPlanSchema,
+} from "./schemas.js";
 
 test("mergeSegments merges overlaps and keeps max energy", () => {
   const merged = mergeSegments([
@@ -66,4 +72,113 @@ test("validateCutPlan accepts a clean plan", () => {
     totalDuration: 2,
     errors: [],
   });
+});
+
+test("MCP Zod schemas reject NaN, Infinity, negative durations, videoDuration > 3600, and > 500 segments", () => {
+  const validPlanInput = {
+    segments: [{ start: 0, end: 5, energy: 0.8 }],
+    videoDuration: MAX_VIDEO_DURATION_SEC,
+    targetBudgetSec: 60,
+  };
+  assert.equal(planDemoCutsSchema.safeParse(validPlanInput).success, true);
+
+  const validValidateInput = {
+    segments: Array.from({ length: MAX_SEGMENTS }, (_, i) => ({
+      start: i,
+      end: i + 0.5,
+    })),
+    videoDuration: MAX_VIDEO_DURATION_SEC,
+    targetBudgetSec: 300,
+  };
+  assert.equal(validateCutPlanSchema.safeParse(validValidateInput).success, true);
+
+  // Reject NaN and +/-Infinity
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(
+      planDemoCutsSchema.safeParse({ ...validPlanInput, videoDuration: bad }).success,
+      false,
+    );
+    assert.equal(
+      planDemoCutsSchema.safeParse({ ...validPlanInput, targetBudgetSec: bad }).success,
+      false,
+    );
+    assert.equal(
+      planDemoCutsSchema.safeParse({
+        ...validPlanInput,
+        segments: [{ start: 0, end: 2, energy: bad }],
+      }).success,
+      false,
+    );
+    assert.equal(
+      validateCutPlanSchema.safeParse({ ...validValidateInput, videoDuration: bad }).success,
+      false,
+    );
+    assert.equal(
+      validateCutPlanSchema.safeParse({
+        ...validValidateInput,
+        segments: [{ start: 0, end: bad }],
+      }).success,
+      false,
+    );
+  }
+
+  // Reject negative or zero videoDuration, negative targetBudgetSec, negative segment duration (end < start)
+  assert.equal(
+    planDemoCutsSchema.safeParse({ ...validPlanInput, videoDuration: 0 }).success,
+    false,
+  );
+  assert.equal(
+    planDemoCutsSchema.safeParse({ ...validPlanInput, videoDuration: -10 }).success,
+    false,
+  );
+  assert.equal(
+    planDemoCutsSchema.safeParse({ ...validPlanInput, targetBudgetSec: -1 }).success,
+    false,
+  );
+  assert.equal(
+    planDemoCutsSchema.safeParse({
+      ...validPlanInput,
+      segments: [{ start: 8, end: 3, energy: 0.5 }],
+    }).success,
+    false,
+  );
+  assert.equal(
+    validateCutPlanSchema.safeParse({
+      ...validValidateInput,
+      segments: [{ start: 5, end: 2 }],
+    }).success,
+    false,
+  );
+
+  // Reject videoDuration > 3600
+  assert.equal(
+    planDemoCutsSchema.safeParse({ ...validPlanInput, videoDuration: 3600.001 }).success,
+    false,
+  );
+  assert.equal(
+    validateCutPlanSchema.safeParse({ ...validValidateInput, videoDuration: 3601 }).success,
+    false,
+  );
+
+  // Reject arrays exceeding 500 segments
+  const tooManyPlanSegments = Array.from({ length: MAX_SEGMENTS + 1 }, (_, i) => ({
+    start: i,
+    end: i + 0.5,
+    energy: 0.5,
+  }));
+  const tooManyCutSegments = Array.from({ length: MAX_SEGMENTS + 1 }, (_, i) => ({
+    start: i,
+    end: i + 0.5,
+  }));
+  assert.equal(
+    planDemoCutsSchema.safeParse({ ...validPlanInput, segments: tooManyPlanSegments }).success,
+    false,
+  );
+  assert.equal(
+    validateCutPlanSchema.safeParse({
+      ...validValidateInput,
+      segments: tooManyCutSegments,
+    }).success,
+    false,
+  );
 });

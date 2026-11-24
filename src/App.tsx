@@ -8,7 +8,12 @@ import { loadSampleVideo } from './components/sampleGenerator';
 import { TimelineBar } from './components/TimelineBar';
 import { UploadZone } from './components/UploadZone';
 import { detectActiveSegments } from './dsp/silenceDetector';
-import { forgeVideo } from './ffmpeg/forger';
+import { forgeVideo, isForgeInProgress } from './ffmpeg/forger';
+import {
+  probeVideoDurationSec,
+  validateMediaDuration,
+  validateMediaFileSize,
+} from './mediaGuardrails';
 import { planCutSegments } from './planner/segmentPlanner';
 import type { CutPlan, ForgeProgress, SilenceConfig } from './types';
 
@@ -45,6 +50,8 @@ export function App() {
   const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [sampleStatus, setSampleStatus] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isForgingActive, setIsForgingActive] = useState(false);
+  const [guardrailError, setGuardrailError] = useState<string | null>(null);
 
   const [progress, setProgress] = useState<ForgeProgress>({
     stage: 'idle',
@@ -58,6 +65,11 @@ export function App() {
 
   const logIdRef = useRef(1);
   const lastLoggedMsgRef = useRef<string>('');
+  const forgedUrlRef = useRef<string | null>(null);
+  const sourcePreviewUrlRef = useRef<string | null>(null);
+  const isForgingRef = useRef(false);
+  const mediaEpochRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const appendLog = useCallback(
     (stage: ForgeProgress['stage'], message: string) => {
@@ -75,21 +87,44 @@ export function App() {
     [],
   );
 
-  const revokeForgedOutput = useCallback(() => {
-    setForgedUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-    setForgedSizeBytes(null);
+  const replaceForgedUrl = useCallback(
+    (nextUrl: string | null, sizeBytes: number | null = null) => {
+      if (forgedUrlRef.current && forgedUrlRef.current !== nextUrl) {
+        URL.revokeObjectURL(forgedUrlRef.current);
+      }
+      forgedUrlRef.current = nextUrl;
+      setForgedUrl(nextUrl);
+      setForgedSizeBytes(sizeBytes);
+    },
+    [],
+  );
+
+  const revokeSourcePreviewUrl = useCallback(() => {
+    if (sourcePreviewUrlRef.current) {
+      URL.revokeObjectURL(sourcePreviewUrlRef.current);
+      sourcePreviewUrlRef.current = null;
+    }
   }, []);
 
+  const revokeAllPreviewUrls = useCallback(() => {
+    replaceForgedUrl(null, null);
+    revokeSourcePreviewUrl();
+  }, [replaceForgedUrl, revokeSourcePreviewUrl]);
+
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (forgedUrl) {
-        URL.revokeObjectURL(forgedUrl);
+      mountedRef.current = false;
+      if (forgedUrlRef.current) {
+        URL.revokeObjectURL(forgedUrlRef.current);
+        forgedUrlRef.current = null;
+      }
+      if (sourcePreviewUrlRef.current) {
+        URL.revokeObjectURL(sourcePreviewUrlRef.current);
+        sourcePreviewUrlRef.current = null;
       }
     };
-  }, [forgedUrl]);
+  }, []);
 
   const cutPlan: CutPlan | null = useMemo(() => {
     if (!audioBuffer) return null;
@@ -101,13 +136,56 @@ export function App() {
     );
   }, [audioBuffer, config]);
 
+  const rejectWithGuardrail = useCallback(
+    (errorMessage: string) => {
+      revokeAllPreviewUrls();
+      setFile(null);
+      setSampleSource(null);
+      setAudioBuffer(null);
+      setGuardrailError(errorMessage);
+      setProgress({ stage: 'error', percent: 0, message: errorMessage });
+      appendLog('error', errorMessage);
+    },
+    [appendLog, revokeAllPreviewUrls],
+  );
+
   const analyzeFile = useCallback(
     async (nextFile: File, source: 'public' | 'synthesized' | null) => {
-      revokeForgedOutput();
+      const epoch = ++mediaEpochRef.current;
+      revokeAllPreviewUrls();
+      setGuardrailError(null);
+
+      // 1. Pre-read file size guardrail (> 250 MB blocked before arrayBuffer allocation)
+      const sizeError = validateMediaFileSize(nextFile);
+      if (sizeError) {
+        rejectWithGuardrail(sizeError);
+        return;
+      }
+
+      setIsAnalyzing(true);
+
+      // 2. Fast container metadata duration check (> 600s blocked before PCM decode)
+      const probedDuration = await probeVideoDurationSec(nextFile);
+      if (!mountedRef.current || epoch !== mediaEpochRef.current) {
+        setIsAnalyzing(false);
+        return;
+      }
+
+      if (probedDuration !== null) {
+        const metaDurationError = validateMediaDuration(
+          probedDuration,
+          nextFile.name,
+        );
+        if (metaDurationError) {
+          setIsAnalyzing(false);
+          rejectWithGuardrail(metaDurationError);
+          return;
+        }
+      }
+
       setFile(nextFile);
       setSampleSource(source);
       setAudioBuffer(null);
-      setIsAnalyzing(true);
 
       const startProgress: ForgeProgress = {
         stage: 'analyzing',
@@ -121,6 +199,23 @@ export function App() {
       try {
         const arrayBuf = await nextFile.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(arrayBuf);
+
+        if (!mountedRef.current || epoch !== mediaEpochRef.current) {
+          return;
+        }
+
+        // 3. Authoritative post-decode duration guardrail (catches WebM Infinity metadata & audio files > 600s)
+        const decodedDurationError = validateMediaDuration(
+          decoded.duration,
+          nextFile.name,
+        );
+        if (decodedDurationError) {
+          rejectWithGuardrail(decodedDurationError);
+          return;
+        }
+
+        // Track fresh preview URL for the newly loaded video and revoke on next load/clear
+        sourcePreviewUrlRef.current = URL.createObjectURL(nextFile);
         setAudioBuffer(decoded);
 
         const active = detectActiveSegments(decoded, config);
@@ -138,28 +233,39 @@ export function App() {
         });
         appendLog('analyzing', readyMsg);
       } catch (err) {
+        if (!mountedRef.current || epoch !== mediaEpochRef.current) {
+          return;
+        }
         const msg =
           err instanceof Error
             ? `Audio decode failed: ${err.message}`
             : 'Unable to decode audio track from this file.';
+        setFile(null);
+        setSampleSource(null);
+        setAudioBuffer(null);
         setProgress({ stage: 'error', percent: 0, message: msg });
         appendLog('error', msg);
       } finally {
-        setIsAnalyzing(false);
+        if (mountedRef.current && epoch === mediaEpochRef.current) {
+          setIsAnalyzing(false);
+        }
         await audioCtx.close().catch(() => undefined);
       }
     },
-    [appendLog, config, revokeForgedOutput],
+    [appendLog, config, rejectWithGuardrail, revokeAllPreviewUrls],
   );
 
   const handleFileSelected = useCallback(
     (selected: File) => {
+      if (isForgingRef.current || isForgeInProgress()) return;
       void analyzeFile(selected, null);
     },
     [analyzeFile],
   );
 
   const handleTrySample = useCallback(async () => {
+    if (isForgingRef.current || isForgeInProgress()) return;
+    setGuardrailError(null);
     setIsLoadingSample(true);
     setSampleStatus('Fetching sample video...');
     appendLog('loading', 'Requested sample demo video...');
@@ -185,47 +291,73 @@ export function App() {
   }, [analyzeFile, appendLog]);
 
   const handleClearFile = useCallback(() => {
-    revokeForgedOutput();
+    if (isForgingRef.current || isForgeInProgress()) return;
+    mediaEpochRef.current++;
+    revokeAllPreviewUrls();
     setFile(null);
     setSampleSource(null);
     setAudioBuffer(null);
     setSampleStatus(null);
+    setGuardrailError(null);
     setProgress({
       stage: 'idle',
       percent: 0,
       message: 'Load a video to analyze silence and forge a tight cut.',
     });
     appendLog('idle', 'Cleared workspace media.');
-  }, [appendLog, revokeForgedOutput]);
+  }, [appendLog, revokeAllPreviewUrls]);
 
   const handleForge = useCallback(async () => {
-    if (!file || !cutPlan || cutPlan.segments.length === 0) return;
+    if (
+      !file ||
+      !cutPlan ||
+      cutPlan.segments.length === 0 ||
+      isForgingRef.current ||
+      isForgeInProgress()
+    ) {
+      return;
+    }
 
-    revokeForgedOutput();
+    isForgingRef.current = true;
+    setIsForgingActive(true);
+    const forgeEpoch = mediaEpochRef.current;
+
+    // Revoke previous forged preview URL before starting a re-forge
+    replaceForgedUrl(null, null);
     lastLoggedMsgRef.current = '';
 
     try {
       const blob = await forgeVideo(file, cutPlan.segments, (p) => {
+        if (!mountedRef.current || forgeEpoch !== mediaEpochRef.current) return;
         setProgress(p);
         appendLog(p.stage, p.message);
       });
 
       const url = URL.createObjectURL(blob);
-      setForgedUrl(url);
-      setForgedSizeBytes(blob.size);
+      if (!mountedRef.current || forgeEpoch !== mediaEpochRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      replaceForgedUrl(url, blob.size);
     } catch {
       // Error state and log already reported by forgeVideo's onProgress
+    } finally {
+      isForgingRef.current = false;
+      if (mountedRef.current) {
+        setIsForgingActive(false);
+      }
     }
-  }, [appendLog, cutPlan, file, revokeForgedOutput]);
+  }, [appendLog, cutPlan, file, replaceForgedUrl]);
 
-  const canForge = Boolean(
-    file && !isAnalyzing && cutPlan && cutPlan.segments.length > 0,
-  );
-
-  const isForging =
+  const isBusy =
+    isForgingActive ||
     progress.stage === 'loading' ||
     progress.stage === 'forging' ||
     isAnalyzing;
+
+  const canForge = Boolean(
+    file && !isBusy && cutPlan && cutPlan.segments.length > 0,
+  );
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-emerald-500/30 selection:text-emerald-100">
@@ -260,7 +392,7 @@ export function App() {
           <div className="hidden items-center gap-2 sm:flex">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/90 px-3 py-1 font-mono text-[11px] text-zinc-300">
               <Cpu className="h-3.5 w-3.5 text-emerald-400" />
-              FFmpeg.wasm
+              FFmpeg.wasm (Self-Hosted)
             </span>
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[11px] ${
@@ -295,6 +427,9 @@ export function App() {
               isLoadingSample={isLoadingSample}
               sampleStatus={sampleStatus}
               isAnalyzing={isAnalyzing}
+              disabled={isForgingActive}
+              guardrailError={guardrailError}
+              onDismissError={() => setGuardrailError(null)}
               onFileSelected={handleFileSelected}
               onTrySample={handleTrySample}
               onClearFile={handleClearFile}
@@ -324,7 +459,7 @@ export function App() {
             <div className="lg:sticky lg:top-20">
               <ControlPanel
                 config={config}
-                disabled={isForging}
+                disabled={isBusy}
                 onChange={setConfig}
                 onReset={() => setConfig(DEFAULT_SILENCE_CONFIG)}
               />

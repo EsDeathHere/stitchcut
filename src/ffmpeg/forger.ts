@@ -1,15 +1,40 @@
 import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import type { AudioSegment, ForgeProgress } from '../types';
 
-const CORE_VERSION = '0.12.10';
-const CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/esm`;
+export const FFMPEG_CORE_JS_URL = '/ffmpeg/ffmpeg-core.js';
+export const FFMPEG_CORE_WASM_URL = '/ffmpeg/ffmpeg-core.wasm';
 
 let ffmpegInstance: FFmpeg | null = null;
 let loadPromise: Promise<FFmpeg> | null = null;
+let isForging = false;
+
+export interface ForgerDeps {
+  loadFFmpeg?: (onProgress: (p: ForgeProgress) => void) => Promise<FFmpeg>;
+}
+
+let customDeps: ForgerDeps | null = null;
+
+export function isForgeInProgress(): boolean {
+  return isForging;
+}
+
+/**
+ * Test hook for injecting a mocked FFmpeg instance and resetting module state.
+ */
+export function __setForgerDepsForTests(deps: ForgerDeps | null): void {
+  customDeps = deps;
+  ffmpegInstance = null;
+  loadPromise = null;
+  isForging = false;
+}
 
 async function getFFmpeg(
   onProgress: (p: ForgeProgress) => void,
 ): Promise<FFmpeg> {
+  if (customDeps?.loadFFmpeg) {
+    return customDeps.loadFFmpeg(onProgress);
+  }
+
   if (ffmpegInstance?.loaded) {
     return ffmpegInstance;
   }
@@ -40,23 +65,32 @@ async function getFFmpeg(
     onProgress({
       stage: 'loading',
       percent: 12,
-      message: 'Fetching FFmpeg WebAssembly core via blob URLs...',
+      message: 'Loading self-hosted FFmpeg WebAssembly core via blob URLs...',
     });
 
-    const [coreURL, wasmURL] = await Promise.all([
-      toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.js`, 'text/javascript'),
-      toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.wasm`, 'application/wasm'),
-    ]);
+    let coreURL: string | null = null;
+    let wasmURL: string | null = null;
 
-    onProgress({
-      stage: 'loading',
-      percent: 20,
-      message: 'Booting FFmpeg.wasm worker...',
-    });
+    try {
+      [coreURL, wasmURL] = await Promise.all([
+        toBlobURL(FFMPEG_CORE_JS_URL, 'text/javascript'),
+        toBlobURL(FFMPEG_CORE_WASM_URL, 'application/wasm'),
+      ]);
 
-    await ffmpeg.load({ coreURL, wasmURL });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
+      onProgress({
+        stage: 'loading',
+        percent: 20,
+        message: 'Booting FFmpeg.wasm worker...',
+      });
+
+      await ffmpeg.load({ coreURL, wasmURL });
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
+    } catch (err) {
+      if (coreURL) URL.revokeObjectURL(coreURL);
+      if (wasmURL) URL.revokeObjectURL(wasmURL);
+      throw err;
+    }
   })();
 
   try {
@@ -70,7 +104,11 @@ async function getFFmpeg(
 
 function getInputExtension(file: File | Blob): string {
   if (file instanceof File && file.name.includes('.')) {
-    const ext = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const ext = file.name
+      .split('.')
+      .pop()
+      ?.toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
     if (ext) return ext;
   }
   const mime = file.type.toLowerCase();
@@ -78,6 +116,43 @@ function getInputExtension(file: File | Blob): string {
   if (mime.includes('quicktime')) return 'mov';
   if (mime.includes('x-matroska') || mime.includes('mkv')) return 'mkv';
   return 'mp4';
+}
+
+async function safeDeleteFile(ffmpeg: FFmpeg, path: string): Promise<void> {
+  try {
+    await ffmpeg.deleteFile(path);
+  } catch {
+    // Ignore MEMFS cleanup errors when file was not created or already deleted
+  }
+}
+
+async function cleanupMemfsRunFiles(
+  ffmpeg: FFmpeg,
+  runId: string,
+  explicitFiles: Iterable<string>,
+): Promise<void> {
+  const candidates = new Set<string>(explicitFiles);
+
+  try {
+    const entries = await ffmpeg.listDir('/');
+    for (const entry of entries) {
+      if (
+        !entry.isDir &&
+        (entry.name.includes(runId) ||
+          entry.name.endsWith('.mbtree') ||
+          entry.name.endsWith('.log') ||
+          entry.name.endsWith('.temp'))
+      ) {
+        candidates.add(entry.name);
+      }
+    }
+  } catch {
+    // listDir may not be available in minimal mocks; fall back to explicitFiles
+  }
+
+  for (const fileName of candidates) {
+    await safeDeleteFile(ffmpeg, fileName);
+  }
 }
 
 /**
@@ -108,6 +183,42 @@ export function buildFilterComplex(segments: AudioSegment[]): string {
 }
 
 /**
+ *Builds the FFmpeg CLI arguments for fast browser H.264/AAC encoding.
+ */
+export function buildFFmpegArgs(
+  inputName: string,
+  filterComplex: string,
+  outputName: string,
+): string[] {
+  return [
+    '-y',
+    '-i',
+    inputName,
+    '-filter_complex',
+    filterComplex,
+    '-map',
+    '[outv]',
+    '-map',
+    '[outa]',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-crf',
+    '23',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-movflags',
+    '+faststart',
+    outputName,
+  ];
+}
+
+/**
  * Stitches planned audio/video segments from a source video into a single
  * browser-memory `.mp4` Blob using FFmpeg.wasm filter_complex.
  */
@@ -116,29 +227,27 @@ export async function forgeVideo(
   segments: AudioSegment[],
   onProgress: (p: ForgeProgress) => void,
 ): Promise<Blob> {
+  if (isForging) {
+    throw new Error(
+      'A video forge job is already running. Please wait for the current encode to finish.',
+    );
+  }
+
   if (segments.length === 0) {
     const msg = 'No active segments provided to forge.';
     onProgress({ stage: 'error', percent: 0, message: msg });
     throw new Error(msg);
   }
 
-  let ffmpeg: FFmpeg;
-  try {
-    ffmpeg = await getFFmpeg(onProgress);
-  } catch (err) {
-    const message =
-      err instanceof Error
-        ? `Failed to load FFmpeg.wasm: ${err.message}`
-        : 'Failed to load FFmpeg.wasm.';
-    onProgress({ stage: 'error', percent: 0, message });
-    throw new Error(message);
-  }
+  isForging = true;
 
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const ext = getInputExtension(file);
   const inputName = `input-${runId}.${ext}`;
   const outputName = `forged-${runId}.mp4`;
+  const trackedFiles = [inputName, outputName];
 
+  let ffmpeg: FFmpeg | null = null;
   const recentLogs: string[] = [];
 
   const handleLog = ({ message }: { type: string; message: string }) => {
@@ -150,8 +259,16 @@ export async function forgeVideo(
     }
   };
 
-  const handleProgress = ({ progress }: { progress: number; time: number }) => {
-    const clamped = Math.min(1, Math.max(0, Number.isFinite(progress) ? progress : 0));
+  const handleProgress = ({
+    progress,
+  }: {
+    progress: number;
+    time: number;
+  }) => {
+    const clamped = Math.min(
+      1,
+      Math.max(0, Number.isFinite(progress) ? progress : 0),
+    );
     const percent = Math.min(95, 28 + Math.round(clamped * 67));
     onProgress({
       stage: 'forging',
@@ -160,20 +277,31 @@ export async function forgeVideo(
     });
   };
 
-  ffmpeg.on('log', handleLog);
-  ffmpeg.on('progress', handleProgress);
-
   try {
+    try {
+      ffmpeg = await getFFmpeg(onProgress);
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? `Failed to load FFmpeg.wasm: ${err.message}`
+          : 'Failed to load FFmpeg.wasm.';
+      onProgress({ stage: 'error', percent: 0, message });
+      throw new Error(message);
+    }
+
+    ffmpeg.on('log', handleLog);
+    ffmpeg.on('progress', handleProgress);
+
     onProgress({
       stage: 'forging',
       percent: 24,
       message: 'Writing source media into FFmpeg virtual filesystem...',
     });
 
-    const inputBytes = new Uint8Array(await file.arrayBuffer());
-    await ffmpeg.writeFile(inputName, inputBytes);
+    await ffmpeg.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
 
     const filterComplex = buildFilterComplex(segments);
+    const args = buildFFmpegArgs(inputName, filterComplex, outputName);
 
     onProgress({
       stage: 'forging',
@@ -181,31 +309,7 @@ export async function forgeVideo(
       message: `Running filter_complex (${segments.length} segment${segments.length === 1 ? '' : 's'})...`,
     });
 
-    const exitCode = await ffmpeg.exec([
-      '-i',
-      inputName,
-      '-filter_complex',
-      filterComplex,
-      '-map',
-      '[outv]',
-      '-map',
-      '[outa]',
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-crf',
-      '23',
-      '-pix_fmt',
-      'yuv420p',
-      '-c:a',
-      'aac',
-      '-b:a',
-      '128k',
-      '-movflags',
-      '+faststart',
-      outputName,
-    ]);
+    const exitCode = await ffmpeg.exec(args);
 
     if (exitCode !== 0) {
       const tail = recentLogs.slice(-4).join(' | ');
@@ -213,6 +317,9 @@ export async function forgeVideo(
         `FFmpeg exited with code ${exitCode}${tail ? `: ${tail}` : ''}`,
       );
     }
+
+    // Free input from MEMFS as soon as encoding finishes to reduce peak heap pressure
+    await safeDeleteFile(ffmpeg, inputName);
 
     onProgress({
       stage: 'forging',
@@ -239,15 +346,17 @@ export async function forgeVideo(
     return blob;
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : 'Unknown error during video forging.';
+      err instanceof Error
+        ? err.message
+        : 'Unknown error during video forging.';
     onProgress({ stage: 'error', percent: 0, message });
     throw err;
   } finally {
-    ffmpeg.off('log', handleLog);
-    ffmpeg.off('progress', handleProgress);
-    await Promise.allSettled([
-      ffmpeg.deleteFile(inputName),
-      ffmpeg.deleteFile(outputName),
-    ]);
+    if (ffmpeg) {
+      ffmpeg.off('log', handleLog);
+      ffmpeg.off('progress', handleProgress);
+      await cleanupMemfsRunFiles(ffmpeg, runId, trackedFiles);
+    }
+    isForging = false;
   }
 }

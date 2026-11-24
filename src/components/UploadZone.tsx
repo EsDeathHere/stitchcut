@@ -1,9 +1,11 @@
 import {
+  AlertCircle,
   FileVideo,
   Loader2,
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
@@ -16,6 +18,9 @@ interface UploadZoneProps {
   isLoadingSample: boolean;
   sampleStatus: string | null;
   isAnalyzing: boolean;
+  disabled?: boolean;
+  guardrailError: string | null;
+  onDismissError: () => void;
   onFileSelected: (file: File) => void;
   onTrySample: () => void;
   onClearFile: () => void;
@@ -42,6 +47,9 @@ export function UploadZone({
   isLoadingSample,
   sampleStatus,
   isAnalyzing,
+  disabled = false,
+  guardrailError,
+  onDismissError,
   onFileSelected,
   onTrySample,
   onClearFile,
@@ -52,7 +60,7 @@ export function UploadZone({
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!isDragging) setIsDragging(true);
+    if (!disabled && !isDragging) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
@@ -65,6 +73,7 @@ export function UploadZone({
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    if (disabled) return;
 
     const dropped = e.dataTransfer.files?.[0];
     if (dropped) {
@@ -74,7 +83,7 @@ export function UploadZone({
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
-    if (selected) {
+    if (selected && !disabled) {
       onFileSelected(selected);
     }
     e.target.value = '';
@@ -88,15 +97,15 @@ export function UploadZone({
             Source Media
           </h2>
           <p className="mt-0.5 text-xs text-zinc-400">
-            Drop a raw recording to decode audio &amp; strip dead air locally in
-            your browser.
+            Drop a raw recording (up to 250 MB / 10 min) to strip dead air
+            locally in your browser.
           </p>
         </div>
 
         <button
           type="button"
           onClick={onTrySample}
-          disabled={isLoadingSample || isAnalyzing}
+          disabled={isLoadingSample || isAnalyzing || disabled}
           className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-violet-500/40 bg-violet-600/20 px-4 py-2 text-xs font-semibold text-violet-200 shadow-sm shadow-violet-950/40 transition hover:border-violet-400/70 hover:bg-violet-600/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isLoadingSample ? (
@@ -108,10 +117,38 @@ export function UploadZone({
         </button>
       </div>
 
+      {guardrailError && (
+        <div
+          role="alert"
+          className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-rose-500/35 bg-rose-950/40 px-3.5 py-3 text-xs text-rose-100"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+            <div className="space-y-0.5">
+              <p className="font-semibold text-rose-200">
+                Browser Memory Guardrail
+              </p>
+              <p className="leading-relaxed text-rose-200/90">
+                {guardrailError}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onDismissError}
+            aria-label="Dismiss error"
+            className="rounded-md p-1 text-rose-300/70 transition hover:bg-rose-500/15 hover:text-rose-100"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <input
         ref={inputRef}
         type="file"
         accept="video/*,audio/*"
+        disabled={disabled}
         onChange={handleInputChange}
         className="hidden"
       />
@@ -121,11 +158,13 @@ export function UploadZone({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onClick={() => inputRef.current?.click()}
+          onClick={() => {
+            if (!disabled) inputRef.current?.click();
+          }}
           role="button"
           tabIndex={0}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
               e.preventDefault();
               inputRef.current?.click();
             }
@@ -153,8 +192,8 @@ export function UploadZone({
             </span>
           </p>
           <p className="mt-1.5 text-xs text-zinc-500">
-            Supports MP4, WebM, MOV — processed 100% client-side with WebAudio
-            &amp; FFmpeg.wasm
+            Supports MP4, WebM, MOV (max 250 MB • max 10 min) — 100%
+            client-side WebAudio &amp; FFmpeg.wasm
           </p>
 
           {sampleStatus && (
@@ -216,16 +255,18 @@ export function UploadZone({
           <div className="flex items-center gap-2">
             <button
               type="button"
+              disabled={disabled}
               onClick={() => inputRef.current?.click()}
-              className="cursor-pointer rounded-lg border border-zinc-700/80 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+              className="cursor-pointer rounded-lg border border-zinc-700/80 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               Replace
             </button>
             <button
               type="button"
+              disabled={disabled}
               onClick={onClearFile}
               aria-label="Remove video"
-              className="cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900 p-1.5 text-zinc-400 transition hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-300"
+              className="cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900 p-1.5 text-zinc-400 transition hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Trash2 className="h-4 w-4" />
             </button>
