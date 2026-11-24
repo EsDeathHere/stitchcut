@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 const crossOriginHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
@@ -18,5 +18,8 @@ export default defineConfig({
   },
   preview: {
     headers: crossOriginHeaders,
+  },
+  test: {
+    include: ['tests/**/*.test.ts'],
   },
 })
