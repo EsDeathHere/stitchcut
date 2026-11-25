@@ -1,13 +1,16 @@
 {
   "mcpServers": {
-    "stitchcut-mcp": {
+    "stitchcut": {
       "command": "node",
       "args": [
         "mcp-server/dist/index.js"
       ],
       "env": {},
       "disabled": false,
-      "autoApprove": []
+      "autoApprove": [
+        "plan_demo_cuts",
+        "validate_cut_plan"
+      ]
     }
   }
 }

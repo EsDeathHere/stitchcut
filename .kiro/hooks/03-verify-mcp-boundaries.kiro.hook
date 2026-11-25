@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Verify MCP Server Build & Zod Boundary Tests",
+  "description": "Compiles mcp-server TypeScript sources and runs the 6 node:test planner and Zod perimeter boundary suites whenever mcp-server/src/** changes.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "mcp-server/src/**"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "cd mcp-server && npm test"
+  }
+}

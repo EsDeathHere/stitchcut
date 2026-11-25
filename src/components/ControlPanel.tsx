@@ -37,10 +37,10 @@ export function ControlPanel({
           </div>
           <div>
             <h2 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
-              Silence &amp; Budget Controls
+              Energy Condenser Controls
             </h2>
             <p className="text-xs text-zinc-400">
-              Tune DSP cut sensitivity and target demo length.
+              Deterministic DSP threshold, dead-air floor, and target budget.
             </p>
           </div>
         </div>
@@ -94,7 +94,7 @@ export function ControlPanel({
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
             <label htmlFor="min-silence" className="font-medium text-zinc-200">
-              Min Silence Duration
+              Min Dead-Air Duration
             </label>
             <span className="rounded-md bg-zinc-950 px-2 py-0.5 font-mono font-semibold text-emerald-400 ring-1 ring-zinc-800 tabular-nums">
               {config.minSilenceDurationSec.toFixed(1)} s
@@ -127,7 +127,7 @@ export function ControlPanel({
               htmlFor="target-budget"
               className="font-medium text-zinc-200"
             >
-              Target Budget
+              Target Time Budget
             </label>
             <span className="rounded-md bg-zinc-950 px-2 py-0.5 font-mono font-semibold text-violet-300 ring-1 ring-zinc-800 tabular-nums">
               {config.targetBudgetSec} s ({formatBudget(config.targetBudgetSec)})
@@ -153,7 +153,7 @@ export function ControlPanel({
 
         {/* Subtle padding readout */}
         <div className="flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/60 px-3.5 py-2.5 text-[11px] text-zinc-400">
-          <span>Breath Padding (Pre / Post Roll)</span>
+          <span>Splice Padding (Pre / Post Roll)</span>
           <span className="font-mono text-zinc-300 tabular-nums">
             {config.preRollMs} ms / {config.postRollMs} ms
           </span>

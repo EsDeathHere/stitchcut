@@ -93,12 +93,17 @@ export function UploadZone({
     <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/70 p-5 shadow-xl shadow-black/30 backdrop-blur-sm">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
-            Source Media
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
+              Raw Specimen
+            </h2>
+            <span className="rounded bg-zinc-800/90 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+              Source Media
+            </span>
+          </div>
           <p className="mt-0.5 text-xs text-zinc-400">
-            Drop a raw recording (up to 250 MB / 10 min) to strip dead air
-            locally in your browser.
+            Drop a raw recording (up to 250 MB / 10 min) to excise dead air
+            100% locally in browser memory.
           </p>
         </div>
 
@@ -113,7 +118,7 @@ export function UploadZone({
           ) : (
             <Sparkles className="h-3.5 w-3.5 text-violet-300" />
           )}
-          {isLoadingSample ? 'Preparing Sample...' : 'Try Sample Video'}
+          {isLoadingSample ? 'Synthesizing Specimen...' : 'Try Sample Specimen'}
         </button>
       </div>
 
@@ -186,14 +191,14 @@ export function UploadZone({
           </div>
 
           <p className="text-sm font-medium text-zinc-200">
-            Drag &amp; drop a video file here, or{' '}
+            Drag &amp; drop a raw video specimen here, or{' '}
             <span className="text-emerald-400 underline decoration-emerald-500/40 underline-offset-4">
               browse files
             </span>
           </p>
           <p className="mt-1.5 text-xs text-zinc-500">
-            Supports MP4, WebM, MOV (max 250 MB • max 10 min) — 100%
-            client-side WebAudio &amp; FFmpeg.wasm
+            Supports MP4, WebM, MOV (max 250 MB • max 10 min) — Zero cloud
+            upload • WebAudio &amp; FFmpeg.wasm
           </p>
 
           {sampleStatus && (
@@ -229,12 +234,12 @@ export function UploadZone({
                 </p>
                 {sampleSource === 'synthesized' && (
                   <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-violet-300 uppercase ring-1 ring-violet-500/30">
-                    Synthesized Clip
+                    Synthesized Lab Clip
                   </span>
                 )}
                 {sampleSource === 'public' && (
                   <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300 uppercase ring-1 ring-emerald-500/30">
-                    Sample Demo
+                    Sample Specimen
                   </span>
                 )}
               </div>

@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "Run Vitest & fast-check PBT on Engine Changes",
+  "description": "Executes the full Vitest + 1,100-run fast-check property-based test suite whenever DSP silence detection, deterministic segment planning, or engine test files are edited.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "src/dsp/**",
+      "src/planner/**",
+      "src/engine/**",
+      "tests/**"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "npm test"
+  }
+}

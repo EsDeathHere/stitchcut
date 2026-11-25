@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Sync Modular Kiro Specs on New Source Module",
+  "description": "Reminds the agent to keep .kiro/specs/ requirements, design, and task checklists synchronized whenever a new module is created under src/ or mcp-server/src/.",
+  "version": "1",
+  "when": {
+    "type": "fileCreated",
+    "patterns": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "mcp-server/src/**/*.ts"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A new source module was added. Inspect `.kiro/specs/01-dsp-silence-engine` through `.kiro/specs/06-mcp-stdio-orchestration` and update the relevant `requirements.md`, `design.md`, and `tasks.md` (or add a new numbered spec module) so all file paths, exported signatures, and test suites remain 100% code-grounded."
+  }
+}

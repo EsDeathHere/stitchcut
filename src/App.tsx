@@ -2,7 +2,7 @@ import { Cpu, Scissors, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ForgeWorkspace } from './components/ForgeWorkspace';
-import type { StageLogEntry } from './components/ForgeWorkspace';
+import type { ForgeBenchmark, StageLogEntry } from './components/ForgeWorkspace';
 import { IsolationBanner } from './components/IsolationBanner';
 import { loadSampleVideo } from './components/sampleGenerator';
 import { TimelineBar } from './components/TimelineBar';
@@ -31,7 +31,7 @@ function nowStamp(): string {
 }
 
 function deriveOutputName(file: File | null): string {
-  if (!file) return 'stitchcut-forged.mp4';
+  if (!file) return 'stitchcut-stitched.mp4';
   const base = file.name.replace(/\.[^.]+$/, '');
   return `${base}-stitchcut.mp4`;
 }
@@ -56,12 +56,16 @@ export function App() {
   const [progress, setProgress] = useState<ForgeProgress>({
     stage: 'idle',
     percent: 0,
-    message: 'Load a video to analyze silence and forge a tight cut.',
+    message: 'Load a raw specimen to analyze RMS energy and stitch a tight cut.',
   });
   const [logs, setLogs] = useState<StageLogEntry[]>([]);
 
   const [forgedUrl, setForgedUrl] = useState<string | null>(null);
   const [forgedSizeBytes, setForgedSizeBytes] = useState<number | null>(null);
+  const [dspAnalyzeMs, setDspAnalyzeMs] = useState<number | null>(null);
+  const [forgeBenchmark, setForgeBenchmark] = useState<ForgeBenchmark | null>(
+    null,
+  );
 
   const logIdRef = useRef(1);
   const lastLoggedMsgRef = useRef<string>('');
@@ -142,6 +146,8 @@ export function App() {
       setFile(null);
       setSampleSource(null);
       setAudioBuffer(null);
+      setDspAnalyzeMs(null);
+      setForgeBenchmark(null);
       setGuardrailError(errorMessage);
       setProgress({ stage: 'error', percent: 0, message: errorMessage });
       appendLog('error', errorMessage);
@@ -154,6 +160,8 @@ export function App() {
       const epoch = ++mediaEpochRef.current;
       revokeAllPreviewUrls();
       setGuardrailError(null);
+      setDspAnalyzeMs(null);
+      setForgeBenchmark(null);
 
       // 1. Pre-read file size guardrail (> 250 MB blocked before arrayBuffer allocation)
       const sizeError = validateMediaFileSize(nextFile);
@@ -190,12 +198,13 @@ export function App() {
       const startProgress: ForgeProgress = {
         stage: 'analyzing',
         percent: 15,
-        message: `Decoding audio track from "${nextFile.name}"...`,
+        message: `Decoding PCM audio from specimen "${nextFile.name}"...`,
       };
       setProgress(startProgress);
       appendLog('analyzing', startProgress.message);
 
       const audioCtx = new AudioContext();
+      const t0 = performance.now();
       try {
         const arrayBuf = await nextFile.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(arrayBuf);
@@ -224,8 +233,10 @@ export function App() {
           decoded.duration,
           config.targetBudgetSec,
         );
+        const analyzeElapsedMs = Math.max(1, performance.now() - t0);
+        setDspAnalyzeMs(analyzeElapsedMs);
 
-        const readyMsg = `Decoded ${decoded.duration.toFixed(1)}s audio (${(decoded.sampleRate / 1000).toFixed(1)} kHz) — ${plan.segments.length} active segment${plan.segments.length === 1 ? '' : 's'} planned.`;
+        const readyMsg = `Decoded ${decoded.duration.toFixed(1)}s specimen (${(decoded.sampleRate / 1000).toFixed(1)} kHz) in ${analyzeElapsedMs.toFixed(0)} ms — ${plan.segments.length} retained segment${plan.segments.length === 1 ? '' : 's'} planned.`;
         setProgress({
           stage: 'idle',
           percent: 0,
@@ -243,6 +254,7 @@ export function App() {
         setFile(null);
         setSampleSource(null);
         setAudioBuffer(null);
+        setDspAnalyzeMs(null);
         setProgress({ stage: 'error', percent: 0, message: msg });
         appendLog('error', msg);
       } finally {
@@ -267,8 +279,8 @@ export function App() {
     if (isForgingRef.current || isForgeInProgress()) return;
     setGuardrailError(null);
     setIsLoadingSample(true);
-    setSampleStatus('Fetching sample video...');
-    appendLog('loading', 'Requested sample demo video...');
+    setSampleStatus('Preparing lab specimen...');
+    appendLog('loading', 'Requested built-in sample specimen...');
 
     try {
       const result = await loadSampleVideo((status) => {
@@ -299,12 +311,14 @@ export function App() {
     setAudioBuffer(null);
     setSampleStatus(null);
     setGuardrailError(null);
+    setDspAnalyzeMs(null);
+    setForgeBenchmark(null);
     setProgress({
       stage: 'idle',
       percent: 0,
-      message: 'Load a video to analyze silence and forge a tight cut.',
+      message: 'Load a raw specimen to analyze RMS energy and stitch a tight cut.',
     });
-    appendLog('idle', 'Cleared workspace media.');
+    appendLog('idle', 'Cleared workspace specimen.');
   }, [appendLog, revokeAllPreviewUrls]);
 
   const handleForge = useCallback(async () => {
@@ -320,12 +334,14 @@ export function App() {
 
     isForgingRef.current = true;
     setIsForgingActive(true);
+    setForgeBenchmark(null);
     const forgeEpoch = mediaEpochRef.current;
 
     // Revoke previous forged preview URL before starting a re-forge
     replaceForgedUrl(null, null);
     lastLoggedMsgRef.current = '';
 
+    const forgeStartMs = performance.now();
     try {
       const blob = await forgeVideo(file, cutPlan.segments, (p) => {
         if (!mountedRef.current || forgeEpoch !== mediaEpochRef.current) return;
@@ -333,12 +349,26 @@ export function App() {
         appendLog(p.stage, p.message);
       });
 
+      const elapsedMs = Math.max(1, performance.now() - forgeStartMs);
       const url = URL.createObjectURL(blob);
       if (!mountedRef.current || forgeEpoch !== mediaEpochRef.current) {
         URL.revokeObjectURL(url);
         return;
       }
       replaceForgedUrl(url, blob.size);
+      setForgeBenchmark({
+        elapsedMs,
+        dspAnalyzeMs,
+        segmentCount: cutPlan.segments.length,
+        inputBytes: file.size,
+        outputBytes: blob.size,
+        forgedDurationSec: cutPlan.forgedDuration,
+        strippedDurationSec: cutPlan.strippedDuration,
+      });
+      appendLog(
+        'done',
+        `Local Forge Benchmark: ${(elapsedMs / 1000).toFixed(2)}s (${Math.round(elapsedMs)} ms) • 0 bytes uploaded.`,
+      );
     } catch {
       // Error state and log already reported by forgeVideo's onProgress
     } finally {
@@ -347,7 +377,7 @@ export function App() {
         setIsForgingActive(false);
       }
     }
-  }, [appendLog, cutPlan, file, replaceForgedUrl]);
+  }, [appendLog, cutPlan, dspAnalyzeMs, file, replaceForgedUrl]);
 
   const isBusy =
     isForgingActive ||
@@ -375,16 +405,20 @@ export function App() {
               <Scissors className="h-5 w-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-base font-bold tracking-tight text-white">
                   StitchCut
                 </h1>
                 <span className="rounded-md bg-violet-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider text-violet-300 uppercase ring-1 ring-violet-500/30">
-                  Kiroween Studio
+                  Stitcher&apos;s Lab
+                </span>
+                <span className="hidden rounded-md bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-wider text-emerald-300 uppercase ring-1 ring-emerald-500/25 md:inline">
+                  Deterministic Energy Condenser
                 </span>
               </div>
               <p className="text-xs text-zinc-400">
-                Browser-native silence removal &amp; FFmpeg.wasm video forger
+                Zero-server WebAudio RMS condenser &amp; self-hosted FFmpeg.wasm
+                video stitcher
               </p>
             </div>
           </div>
@@ -437,6 +471,7 @@ export function App() {
 
             <TimelineBar
               plan={cutPlan}
+              audioBuffer={audioBuffer}
               targetBudgetSec={config.targetBudgetSec}
               hasFile={Boolean(file && audioBuffer)}
             />
@@ -449,6 +484,7 @@ export function App() {
               logs={logs}
               forgedUrl={forgedUrl}
               forgedSizeBytes={forgedSizeBytes}
+              benchmark={forgeBenchmark}
               outputFileName={deriveOutputName(file)}
               onForge={handleForge}
             />

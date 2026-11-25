@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Verify Self-Hosted FFmpeg.wasm Assets & Hardening",
+  "description": "Confirms non-empty self-hosted public/ffmpeg/ffmpeg-core.{js,wasm} binaries, COOP/COEP config integrity, and MEMFS hardening tests when FFmpeg or Vite config files change.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "src/ffmpeg/**",
+      "vite.config.ts",
+      "vercel.json"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "test -s public/ffmpeg/ffmpeg-core.js && test -s public/ffmpeg/ffmpeg-core.wasm && npx vitest run tests/hardening.test.ts"
+  }
+}

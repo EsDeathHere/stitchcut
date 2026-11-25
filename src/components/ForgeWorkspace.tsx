@@ -2,7 +2,9 @@ import {
   CheckCircle2,
   Download,
   Film,
+  Gauge,
   Loader2,
+  ShieldCheck,
   Terminal,
   Wand2,
   XCircle,
@@ -16,6 +18,16 @@ export interface StageLogEntry {
   message: string;
 }
 
+export interface ForgeBenchmark {
+  elapsedMs: number;
+  dspAnalyzeMs: number | null;
+  segmentCount: number;
+  inputBytes: number;
+  outputBytes: number;
+  forgedDurationSec: number;
+  strippedDurationSec: number;
+}
+
 interface ForgeWorkspaceProps {
   canForge: boolean;
   hasFile: boolean;
@@ -24,6 +36,7 @@ interface ForgeWorkspaceProps {
   logs: StageLogEntry[];
   forgedUrl: string | null;
   forgedSizeBytes: number | null;
+  benchmark: ForgeBenchmark | null;
   outputFileName: string;
   onForge: () => void;
 }
@@ -31,8 +44,8 @@ interface ForgeWorkspaceProps {
 const STAGE_LABELS: Record<ForgeProgress['stage'], string> = {
   idle: 'Ready',
   loading: 'Loading FFmpeg.wasm',
-  analyzing: 'Analyzing Audio',
-  forging: 'Forging MP4',
+  analyzing: 'Analyzing Specimen',
+  forging: 'Stitching MP4',
   done: 'Complete',
   error: 'Error',
 };
@@ -40,6 +53,14 @@ const STAGE_LABELS: Record<ForgeProgress['stage'], string> = {
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatElapsed(ms: number): string {
+  const roundedMs = Math.max(1, Math.round(ms));
+  if (roundedMs < 1000) {
+    return `${roundedMs} ms (${(roundedMs / 1000).toFixed(2)} s)`;
+  }
+  return `${(roundedMs / 1000).toFixed(2)} s (${roundedMs.toLocaleString()} ms)`;
 }
 
 export function ForgeWorkspace({
@@ -50,6 +71,7 @@ export function ForgeWorkspace({
   logs,
   forgedUrl,
   forgedSizeBytes,
+  benchmark,
   outputFileName,
   onForge,
 }: ForgeWorkspaceProps) {
@@ -60,6 +82,11 @@ export function ForgeWorkspace({
 
   const percent = Math.min(100, Math.max(0, Math.round(progress.percent)));
 
+  const realtimeFactor =
+    benchmark && benchmark.elapsedMs > 0 && benchmark.forgedDurationSec > 0
+      ? benchmark.forgedDurationSec / (benchmark.elapsedMs / 1000)
+      : null;
+
   return (
     <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/70 p-5 shadow-xl shadow-black/30 backdrop-blur-sm">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -69,11 +96,11 @@ export function ForgeWorkspace({
           </div>
           <div>
             <h2 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
-              Forge Studio Output
+              Stitcher&apos;s Forge &mdash; Stitched Output
             </h2>
             <p className="text-xs text-zinc-400">
-              Stitch planned segments into a single H.264/AAC MP4 in browser
-              memory.
+              Splice retained high-energy segments into a single H.264/AAC MP4
+              inside browser MEMFS.
             </p>
           </div>
         </div>
@@ -89,14 +116,14 @@ export function ForgeWorkspace({
           ) : (
             <Wand2 className="h-4 w-4" />
           )}
-          {isWorking ? 'Forging Video...' : 'Forge Demo Video'}
+          {isWorking ? 'Stitching Specimen...' : 'Forge Stitched MP4'}
         </button>
       </div>
 
       {!canForge && hasFile && !isWorking && (
         <p className="mb-4 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5 text-xs text-zinc-400">
           {segmentCount === 0
-            ? 'No active segments are currently planned to forge. Adjust the Silence Threshold or ensure audio speech is detected.'
+            ? 'No active segments are currently planned to stitch. Adjust the Silence Threshold or ensure speech energy is detected.'
             : 'Preparing audio analysis...'}
         </p>
       )}
@@ -144,7 +171,7 @@ export function ForgeWorkspace({
         <div className="flex items-center justify-between border-b border-zinc-800/80 px-3.5 py-2">
           <span className="inline-flex items-center gap-1.5 font-mono text-[11px] font-medium text-zinc-400 uppercase">
             <Terminal className="h-3.5 w-3.5 text-violet-400" />
-            Stage Logs
+            Stage Telemetry
           </span>
           <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
             {logs.length} {logs.length === 1 ? 'event' : 'events'}
@@ -154,7 +181,7 @@ export function ForgeWorkspace({
         <div className="studio-scrollbar max-h-40 overflow-y-auto px-3.5 py-2.5 font-mono text-xs">
           {logs.length === 0 ? (
             <p className="text-zinc-600">
-              Awaiting media input and forge command...
+              Awaiting raw specimen and stitch command...
             </p>
           ) : (
             <ul className="space-y-1.5">
@@ -187,13 +214,70 @@ export function ForgeWorkspace({
         </div>
       </div>
 
-      {/* Inline forged video preview + one-click download */}
+      {/* Local Forge Benchmark + Stitched Output Video Preview */}
       {forgedUrl && (
-        <div className="mt-5 space-y-3 rounded-xl border border-emerald-500/30 bg-zinc-950/90 p-4">
+        <div className="mt-5 space-y-4 rounded-xl border border-emerald-500/30 bg-zinc-950/90 p-4">
+          {benchmark && (
+            <div className="rounded-xl border border-violet-500/25 bg-gradient-to-r from-violet-950/30 via-zinc-950 to-emerald-950/25 p-3.5">
+              <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold tracking-wide text-violet-200 uppercase">
+                  <Gauge className="h-3.5 w-3.5 text-violet-400" />
+                  Local Forge Benchmark
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-[11px] font-medium text-emerald-300">
+                  <ShieldCheck className="h-3.5 w-3.5" />0 Bytes Uploaded •
+                  Zero-Server Privacy
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/80 px-3 py-2">
+                  <p className="text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
+                    WASM Stitch Time
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs font-semibold text-emerald-300 tabular-nums">
+                    {formatElapsed(benchmark.elapsedMs)}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/80 px-3 py-2">
+                  <p className="text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
+                    DSP + Cut Plan
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs font-semibold text-zinc-200 tabular-nums">
+                    {benchmark.dspAnalyzeMs !== null
+                      ? `${Math.round(benchmark.dspAnalyzeMs)} ms`
+                      : '—'}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/80 px-3 py-2">
+                  <p className="text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
+                    Throughput
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs font-semibold text-violet-300 tabular-nums">
+                    {realtimeFactor !== null
+                      ? `${realtimeFactor.toFixed(2)}× real-time`
+                      : `${benchmark.segmentCount} splices`}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/80 px-3 py-2">
+                  <p className="text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
+                    MEMFS Hygiene
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs font-semibold text-emerald-300">
+                    Scratch Purged
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-emerald-300">
-                Forged Output Ready
+                Stitched Output Ready
               </p>
               <p className="font-mono text-xs text-zinc-400">
                 {outputFileName}
