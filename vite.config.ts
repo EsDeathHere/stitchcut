@@ -13,6 +13,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util', '@ffmpeg/core'],
   },
+  worker: {
+    format: 'es',
+  },
   server: {
     headers: crossOriginHeaders,
   },

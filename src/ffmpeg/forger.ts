@@ -1,8 +1,14 @@
 import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import type { AudioSegment, ForgeProgress } from '../types';
 
-export const FFMPEG_CORE_JS_URL = '/ffmpeg/ffmpeg-core.js';
-export const FFMPEG_CORE_WASM_URL = '/ffmpeg/ffmpeg-core.wasm';
+const RAW_BASE_URL = import.meta.env.BASE_URL || '/';
+const NORMALIZED_BASE_URL = RAW_BASE_URL.endsWith('/')
+  ? RAW_BASE_URL
+  : `${RAW_BASE_URL}/`;
+
+export const FFMPEG_WORKER_JS_URL = `${NORMALIZED_BASE_URL}ffmpeg/worker.js`;
+export const FFMPEG_CORE_JS_URL = `${NORMALIZED_BASE_URL}ffmpeg/ffmpeg-core.js`;
+export const FFMPEG_CORE_WASM_URL = `${NORMALIZED_BASE_URL}ffmpeg/ffmpeg-core.wasm`;
 
 let ffmpegInstance: FFmpeg | null = null;
 let loadPromise: Promise<FFmpeg> | null = null;
@@ -68,11 +74,13 @@ async function getFFmpeg(
       message: 'Loading self-hosted FFmpeg WebAssembly core via blob URLs...',
     });
 
+    let classWorkerURL: string | null = null;
     let coreURL: string | null = null;
     let wasmURL: string | null = null;
 
     try {
-      [coreURL, wasmURL] = await Promise.all([
+      [classWorkerURL, coreURL, wasmURL] = await Promise.all([
+        toBlobURL(FFMPEG_WORKER_JS_URL, 'text/javascript'),
         toBlobURL(FFMPEG_CORE_JS_URL, 'text/javascript'),
         toBlobURL(FFMPEG_CORE_WASM_URL, 'application/wasm'),
       ]);
@@ -83,10 +91,11 @@ async function getFFmpeg(
         message: 'Booting FFmpeg.wasm worker...',
       });
 
-      await ffmpeg.load({ coreURL, wasmURL });
+      await ffmpeg.load({ classWorkerURL, coreURL, wasmURL });
       ffmpegInstance = ffmpeg;
       return ffmpeg;
     } catch (err) {
+      if (classWorkerURL) URL.revokeObjectURL(classWorkerURL);
       if (coreURL) URL.revokeObjectURL(coreURL);
       if (wasmURL) URL.revokeObjectURL(wasmURL);
       throw err;

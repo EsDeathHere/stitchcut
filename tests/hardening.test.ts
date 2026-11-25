@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FFMPEG_CORE_JS_URL,
   FFMPEG_CORE_WASM_URL,
+  FFMPEG_WORKER_JS_URL,
   __setForgerDepsForTests,
   buildFFmpegArgs,
   forgeVideo,
@@ -21,8 +22,10 @@ describe('FFmpeg self-hosting & WASM encoding hardening', () => {
   });
 
   it('uses strictly local same-origin paths for FFmpeg core assets (zero external CDN)', () => {
+    expect(FFMPEG_WORKER_JS_URL).toBe('/ffmpeg/worker.js');
     expect(FFMPEG_CORE_JS_URL).toBe('/ffmpeg/ffmpeg-core.js');
     expect(FFMPEG_CORE_WASM_URL).toBe('/ffmpeg/ffmpeg-core.wasm');
+    expect(FFMPEG_WORKER_JS_URL).not.toMatch(/unpkg|jsdelivr|https?:/i);
     expect(FFMPEG_CORE_JS_URL).not.toMatch(/unpkg|jsdelivr|https?:/i);
     expect(FFMPEG_CORE_WASM_URL).not.toMatch(/unpkg|jsdelivr|https?:/i);
   });
